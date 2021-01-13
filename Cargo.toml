@@ -16,6 +16,10 @@ exclude = [
     "test_pngs/*",
 ]
 
+[features]
+default = []
+apng =[]
+
 [dependencies]
 crc32fast = "1"
 num_enum = { version = "0.5", features = [] }

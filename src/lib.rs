@@ -957,6 +957,7 @@ pub fn decode(bytes: &[u8]) -> Result<(PngHeader, Vec<u8>), DecodeError> {
     Ok((header, output_rgba))
 }
 
+#[cfg(feature = "apng")]
 pub mod apng {
 	use super::*;
 	
@@ -1067,7 +1068,7 @@ impl<'a> FrameData<'a> {
 
 
 
-	pub fn decode_all(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<Vec<u8>>), DecodeError> {
+	pub fn decode_all(bytes: &[u8]) -> Result<(PngHeader, Vec<Vec<u8>>), DecodeError> {
 		if bytes.len() < PNG_MAGIC_BYTES.len() {
 			return Err(DecodeError::MissingBytes);
 		}
@@ -1155,7 +1156,7 @@ impl<'a> FrameData<'a> {
 			}
 		}
 
-		Ok((header, ancillary_chunks, png_frames))
+		Ok((header, png_frames))
 	}
 
 }
