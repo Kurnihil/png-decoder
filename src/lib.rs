@@ -522,6 +522,9 @@ pub enum ChunkType {
     ImageData,
     ImageEnd,
     Gamma,
+    AnimationControl,
+    FrameControl,
+    FrameData,
     Unknown([u8; 4]),
 }
 
@@ -536,6 +539,9 @@ impl ChunkType {
             b"IDAT" => ChunkType::ImageData,
             b"IEND" => ChunkType::ImageEnd,
             b"gAMA" => ChunkType::Gamma,
+            b"acTL" => ChunkType::AnimationControl,
+            b"fcTL" => ChunkType::FrameControl,
+            b"fdAT" => ChunkType::FrameData,
             unknown_chunk_type => {
                 // println!("chunk_type: {:?}", alloc::string::String::from_utf8(chunk_type.to_vec()));
                 ChunkType::Unknown(*unknown_chunk_type)
@@ -602,6 +608,10 @@ impl<'a> TransparencyChunk<'a> {
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
 }
 
 fn read_chunk(bytes: &[u8]) -> Result<Chunk, DecodeError> {
@@ -943,8 +953,211 @@ pub fn decode(bytes: &[u8]) -> Result<(PngHeader, Vec<u8>), DecodeError> {
         &ancillary_chunks,
         pixel_type,
     )?;
-
+    
     Ok((header, output_rgba))
+}
+
+pub mod apng {
+	use super::*;
+	
+#[derive(Debug)]
+pub struct AnimationChunk{
+	pub num_frames: u32,
+	pub num_plays: u32,
+}
+
+impl<'a> AnimationChunk {
+    fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
+        if chunk.chunk_type != ChunkType::AnimationControl {
+            return None;
+        }
+        if chunk.data.len() < 8 {
+            return None;
+        }
+		Some(AnimationChunk {
+			num_frames: read_u32(chunk.data, 0),
+			num_plays: read_u32(chunk.data, 4),
+		})
+    }
+}
+
+
+#[repr(u8)]
+#[derive(Debug, TryFromPrimitive)]
+pub enum DisposeOp {
+	None = 0,
+	Background = 1,
+	Previous = 2,
+}
+
+#[repr(u8)]
+#[derive(Debug, TryFromPrimitive)]
+pub enum BlendOp {
+	Source = 0,
+	Over = 1,
+}
+
+#[derive(Debug)]
+pub struct FrameChunk{
+	pub seq_nr: u32,
+	pub width: u32,
+	pub height: u32,
+	pub x_offset: u32,
+	pub y_offset: u32,
+	pub delay_num: u16,
+	pub delay_den: u16,
+	pub dispose_op: DisposeOp,
+	pub blend_op: BlendOp,
+}
+
+impl<'a> FrameChunk {
+    fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
+        if chunk.chunk_type != ChunkType::FrameControl {
+            return None;
+        }
+        
+        if chunk.data.len() < 26 {
+            return None;
+        }
+        
+        let seq_nr = read_u32(chunk.data, 0);
+        let width = read_u32(chunk.data, 4);
+        let height = read_u32(chunk.data, 8);
+        let x_offset = read_u32(chunk.data, 12);
+        let y_offset = read_u32(chunk.data, 16);
+        let delay_num = read_u16(chunk.data, 20);
+        let delay_den = read_u16(chunk.data, 22);
+        let dispose_op = chunk.data[24];
+        let blend_op = chunk.data[25];
+        
+		Some(FrameChunk {
+			seq_nr,
+			width,
+			height,
+			x_offset,
+			y_offset,
+			delay_num,
+			delay_den,
+			dispose_op: TryFrom::try_from(dispose_op).unwrap_or(DisposeOp::None),
+			blend_op: 	TryFrom::try_from(dispose_op).unwrap_or(BlendOp::Source),
+			
+		})
+    }
+}
+
+pub struct FrameData<'a> {
+	pub seq_nr: u32,
+    pub data: &'a [u8],	
+}
+
+impl<'a> FrameData<'a> {
+    fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
+        if chunk.chunk_type != ChunkType::FrameData {
+            return None;
+        }
+        
+        let seq_nr = read_u32(chunk.data, 0);	
+        Some(FrameData {
+			seq_nr,
+			data: &chunk.data[4..],
+		})
+    }
+}
+
+
+
+
+	pub fn decode_all(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<Vec<u8>>), DecodeError> {
+		if bytes.len() < PNG_MAGIC_BYTES.len() {
+			return Err(DecodeError::MissingBytes);
+		}
+
+		if &bytes[0..PNG_MAGIC_BYTES.len()] != PNG_MAGIC_BYTES {
+			return Err(DecodeError::InvalidMagicBytes);
+		}
+
+		let bytes = &bytes[PNG_MAGIC_BYTES.len()..];
+
+		let header_chunk = read_chunk(bytes)?;
+		let header = PngHeader::from_chunk(&header_chunk)?;
+
+		let mut bytes = &bytes[header_chunk.byte_size()..];
+
+		let mut compressed_data: Vec<u8> =
+			Vec::with_capacity(header.width as usize * header.height as usize * 3);
+
+		let pixel_type = PixelType::new(header.color_type, header.bit_depth)?;
+		let mut ancillary_chunks = AncillaryChunks::default();
+
+		let mut compressed_frames = Vec::new();
+		let mut frame_control = Vec::new();
+		let mut animation = None;
+		
+		while !bytes.is_empty() {
+			let chunk = read_chunk(bytes)?;
+		
+			match chunk.chunk_type {
+				ChunkType::AnimationControl => animation = AnimationChunk::from_chunk(&chunk),
+				ChunkType::ImageData => compressed_data.extend_from_slice(chunk.data),
+				ChunkType::Palette => ancillary_chunks.palette = Some(chunk.data),
+				ChunkType::Transparency => ancillary_chunks.transparency = TransparencyChunk::from_chunk(&chunk, pixel_type),
+				ChunkType::Background => ancillary_chunks.background = Some(chunk.data),
+				ChunkType::FrameControl => frame_control.push(FrameChunk::from_chunk(&chunk)),
+				ChunkType::FrameData => {
+					let frame = FrameData::from_chunk(&chunk).unwrap();
+					let mut compressed_frame: Vec<u8> =
+						Vec::with_capacity(header.width as usize * header.height as usize * 3);
+					compressed_frame.extend_from_slice(frame.data);
+					compressed_frames.push(compressed_frame)
+				},
+				_ => {},
+			}
+
+			bytes = &bytes[chunk.byte_size()..];
+		}
+		
+		let num_frames = match animation {
+			Some(ref v) => v.num_frames as usize,
+			None => 1,
+		};
+
+		let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed_data)
+			.map_err(DecodeError::Decompress)?;
+
+		// For now, output data is always RGBA, 1 byte per channel.
+		let mut output_rgba = vec![0u8; header.width as usize * header.height as usize * 4];
+
+		process_scanlines(
+			&header,
+			&mut scanline_data,
+			&mut output_rgba,
+			&ancillary_chunks,
+			pixel_type,
+		)?;
+		let mut png_frames = vec![output_rgba];
+		
+		if num_frames > 1 {
+			for frame in compressed_frames {
+		
+				let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&frame)
+					.map_err(DecodeError::Decompress)?;
+				// For now, output data is always RGBA, 1 byte per channel.
+				let mut output_rgba = vec![0u8; header.width as usize * header.height as usize * 4];
+
+				process_scanlines(
+					&header,
+					&mut scanline_data,
+					&mut output_rgba,
+					&ancillary_chunks,
+					pixel_type,
+				)?;
+				png_frames.push(output_rgba);
+			}
+		}
+
+		Ok((header, ancillary_chunks, png_frames))
+	}
+
 }
 
 #[cfg(test)]

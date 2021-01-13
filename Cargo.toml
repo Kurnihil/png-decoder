@@ -1,14 +1,14 @@
 [package]
 name = "png-decoder"
 version = "0.1.0"
-authors = ["Brian Schwind <brianmschwind@gmail.com>"]
+authors = ["Brian Schwind <brianmschwind@gmail.com>", "Kurnihil <kurnihil@protonmail.com>"]
 edition = "2018"
 repository = "https://github.com/bschwind/png-decoder"
 description = "A pure-Rust, no_std compatible PNG decoder."
 homepage = "https://github.com/bschwind/png-decoder"
 readme = "README.md"
 documentation = "https://docs.rs/png-decoder"
-keywords = ["png", "image", "decoder"]
+keywords = ["png", "apng", "image", "decoder"]
 categories = ["multimedia::images"]
 license-file = "MIT"
 
