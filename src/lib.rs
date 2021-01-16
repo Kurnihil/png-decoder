@@ -412,19 +412,19 @@ impl<'a> Iterator for ScanlineIterator<'a> {
 }
 
 #[repr(u8)]
-#[derive(Debug, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 pub enum CompressionMethod {
     Deflate = 0,
 }
 
 #[repr(u8)]
-#[derive(Debug, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 pub enum FilterMethod {
     Adaptive = 0,
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 pub enum FilterType {
     None = 0,
     Sub = 1,
@@ -434,7 +434,7 @@ pub enum FilterType {
 }
 
 #[repr(u8)]
-#[derive(Debug, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 pub enum InterlaceMethod {
     None = 0,
     Adam7 = 1,
@@ -492,6 +492,7 @@ pub enum DecodeError {
     EndChunkNotLast,
     InvalidChunkType,
     InvalidChunk,
+    InvalidControl,
     Decompress(TINFLStatus),
 
     IncorrectChunkCrc,
@@ -959,207 +960,327 @@ pub fn decode(bytes: &[u8]) -> Result<(PngHeader, Vec<u8>), DecodeError> {
 
 #[cfg(feature = "apng")]
 pub mod apng {
-	use super::*;
+use super::*;
+
+#[derive(Debug)]
+struct AnimationChunk{
+    num_frames: u32,
+    num_plays: u32,
+}
+
+impl AnimationChunk {
+    fn from_chunk(chunk: &Chunk) -> Option<Self> {
+	if chunk.chunk_type != ChunkType::AnimationControl {
+		return None;
+	}
+	if chunk.data.len() < 8 {
+		return None;
+	}
 	
-#[derive(Debug)]
-pub struct AnimationChunk{
-	pub num_frames: u32,
-	pub num_plays: u32,
-}
-
-impl<'a> AnimationChunk {
-    fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
-        if chunk.chunk_type != ChunkType::AnimationControl {
-            return None;
-        }
-        if chunk.data.len() < 8 {
-            return None;
-        }
-		Some(AnimationChunk {
-			num_frames: read_u32(chunk.data, 0),
-			num_plays: read_u32(chunk.data, 4),
+	let num_frames = read_u32(chunk.data, 0);
+	let num_plays = read_u32(chunk.data, 4);
+	
+	if num_frames != 0 {
+		Some( AnimationChunk {
+			num_frames,
+			num_plays,
 		})
+	}else{
+		None
+	}
     }
 }
 
-
 #[repr(u8)]
-#[derive(Debug, TryFromPrimitive)]
-pub enum DisposeOp {
-	None = 0,
-	Background = 1,
-	Previous = 2,
+#[derive(Debug, PartialEq,  TryFromPrimitive)]
+enum DisposeOp {
+    None = 0,
+    Background = 1,
+    Previous = 2,
 }
 
 #[repr(u8)]
-#[derive(Debug, TryFromPrimitive)]
-pub enum BlendOp {
-	Source = 0,
-	Over = 1,
+#[derive(Debug, PartialEq, TryFromPrimitive)]
+enum BlendOp {
+    Source = 0,
+    Over = 1,
 }
 
 #[derive(Debug)]
-pub struct FrameChunk{
-	pub seq_nr: u32,
-	pub width: u32,
-	pub height: u32,
-	pub x_offset: u32,
-	pub y_offset: u32,
-	pub delay_num: u16,
-	pub delay_den: u16,
-	pub dispose_op: DisposeOp,
-	pub blend_op: BlendOp,
+struct FrameChunk{
+    seq_nr: u32,
+    width: u32,
+    height: u32,
+    x_offset: u32,
+    y_offset: u32,
+    delay_num: u16,
+    delay_den: u16,
+    dispose_op: DisposeOp,
+    blend_op: BlendOp,
 }
 
-impl<'a> FrameChunk {
-    fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
-        if chunk.chunk_type != ChunkType::FrameControl {
-            return None;
-        }
-        
-        if chunk.data.len() < 26 {
-            return None;
-        }
-        
-        let seq_nr = read_u32(chunk.data, 0);
-        let width = read_u32(chunk.data, 4);
-        let height = read_u32(chunk.data, 8);
-        let x_offset = read_u32(chunk.data, 12);
-        let y_offset = read_u32(chunk.data, 16);
-        let delay_num = read_u16(chunk.data, 20);
-        let delay_den = read_u16(chunk.data, 22);
-        let dispose_op = chunk.data[24];
-        let blend_op = chunk.data[25];
-        
-		Some(FrameChunk {
-			seq_nr,
-			width,
-			height,
-			x_offset,
-			y_offset,
-			delay_num,
-			delay_den,
-			dispose_op: TryFrom::try_from(dispose_op).unwrap_or(DisposeOp::None),
-			blend_op: 	TryFrom::try_from(dispose_op).unwrap_or(BlendOp::Source),
-			
-		})
+impl FrameChunk {
+    fn from_chunk(chunk: &Chunk) -> Option<Self> {
+	if chunk.chunk_type != ChunkType::FrameControl {
+		return None;
+	}
+	
+	if chunk.data.len() < 26 {
+		return None;
+	}
+	
+	let seq_nr = read_u32(chunk.data, 0);
+	let width = read_u32(chunk.data, 4);
+	let height = read_u32(chunk.data, 8);
+	let x_offset = read_u32(chunk.data, 12);
+	let y_offset = read_u32(chunk.data, 16);
+	let delay_num = read_u16(chunk.data, 20);
+	let delay_den = read_u16(chunk.data, 22);
+	let dispose_op = chunk.data[24];
+	let blend_op = chunk.data[25];
+	
+	Some(FrameChunk {
+	    seq_nr,
+	    width,
+	    height,
+	    x_offset,
+	    y_offset,
+	    delay_num,
+	    delay_den,
+	    dispose_op: TryFrom::try_from(dispose_op).unwrap_or(DisposeOp::None),
+	    blend_op: 	TryFrom::try_from(blend_op).unwrap_or(BlendOp::Source),
+	})
     }
 }
 
-pub struct FrameData<'a> {
-	pub seq_nr: u32,
-    pub data: &'a [u8],	
+struct FrameData<'a> {
+    _seq_nr: u32,
+    data: &'a [u8],	
 }
 
 impl<'a> FrameData<'a> {
     fn from_chunk(chunk: &Chunk<'a>) -> Option<Self> {
-        if chunk.chunk_type != ChunkType::FrameData {
-            return None;
-        }
-        
-        let seq_nr = read_u32(chunk.data, 0);	
-        Some(FrameData {
-			seq_nr,
-			data: &chunk.data[4..],
-		})
+	if chunk.chunk_type != ChunkType::FrameData {
+	    return None;
+	}
+	
+	let _seq_nr = read_u32(chunk.data, 0);	
+	
+	Some(FrameData {
+	    _seq_nr,
+	    data: &chunk.data[4..],
+	})
     }
 }
 
+#[derive(Debug)]
+pub struct ApngHeader {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: BitDepth,
+    pub color_type: ColorType,
+    pub compression_method: CompressionMethod,
+    pub filter_method: FilterMethod,
+    pub interlace_method: InterlaceMethod,
+    pub num_frames: u32,
+    pub num_plays: u32,
+    pub skip_first: bool,
+    pub delays: Vec<core::time::Duration>,
+}
 
+impl ApngHeader {
+    fn new(header: &PngHeader) -> Self {
+	ApngHeader {
+	    width: header.width,
+	    height: header.height,
+	    bit_depth: header.bit_depth,
+	    color_type: header.color_type,
+	    compression_method: header.compression_method,
+	    filter_method: header.filter_method,
+	    interlace_method: header.interlace_method,
+	    num_frames: 1,
+	    num_plays: 0,
+	    skip_first: false,
+	    delays: Vec::new(),
+	}
+    }
+}
 
+fn blend(bg: &mut [u8], fg: &[u8]) {
+    for pos in (0..bg.len()).step_by(4) {
+	let new_pixel = (fg[pos] as f64 / 255.0, fg[pos+1] as f64 / 255.0, fg[pos+2] as f64 / 255.0, fg[pos+3] as f64 / 255.0);
+	let old_pixel = (bg[pos] as f64 / 255.0, bg[pos+1] as f64 / 255.0, bg[pos+2] as f64 / 255.0, bg[pos+3] as f64 / 255.0);
+	
+	let alpha_final = old_pixel.3 + new_pixel.3 - old_pixel.3 * new_pixel.3;
+	if alpha_final == 0.0 { return; }
+	
+	bg[pos+0] = (255.0 * (new_pixel.0 * new_pixel.3 + old_pixel.0 * old_pixel.3 * (1.0 - new_pixel.3)) / alpha_final) as u8;
+	bg[pos+1] = (255.0 * (new_pixel.1 * new_pixel.3 + old_pixel.1 * old_pixel.3 * (1.0 - new_pixel.3)) / alpha_final) as u8;
+	bg[pos+2] = (255.0 * (new_pixel.2 * new_pixel.3 + old_pixel.2 * old_pixel.3 * (1.0 - new_pixel.3)) / alpha_final) as u8;
+	bg[pos+3] = (255.0 * alpha_final) as u8;
+    }
+}
 
-	pub fn decode_all(bytes: &[u8]) -> Result<(PngHeader, Vec<Vec<u8>>), DecodeError> {
-		if bytes.len() < PNG_MAGIC_BYTES.len() {
-			return Err(DecodeError::MissingBytes);
+fn replace(bg: &mut [u8], fg: &[u8]) {
+    for pos in (0..bg.len()).step_by(4) {
+	bg[pos+0] = fg[pos+0];
+	bg[pos+1] = fg[pos+1];
+	bg[pos+2] = fg[pos+2];
+	bg[pos+3] = fg[pos+3];
+    }
+}
+
+pub fn decode(bytes: &[u8]) -> Result<(ApngHeader, Vec<Vec<u8>>), DecodeError> {
+    if bytes.len() < PNG_MAGIC_BYTES.len() {
+	return Err(DecodeError::MissingBytes);
+    }
+
+    if &bytes[0..PNG_MAGIC_BYTES.len()] != PNG_MAGIC_BYTES {
+	return Err(DecodeError::InvalidMagicBytes);
+    }
+
+    let bytes = &bytes[PNG_MAGIC_BYTES.len()..];
+
+    let header_chunk = read_chunk(bytes)?;
+    let mut header = PngHeader::from_chunk(&header_chunk)?;
+    let mut apng_header = ApngHeader::new(&header);
+
+    let mut bytes = &bytes[header_chunk.byte_size()..];
+
+    let pixel_type = PixelType::new(header.color_type, header.bit_depth)?;
+    let mut ancillary_chunks = AncillaryChunks::default();
+
+    let mut frame_control = Vec::new();
+    let mut compressed_frames: Vec<Vec<u8>> = Vec::new();
+
+    while !bytes.is_empty() {
+	let chunk = read_chunk(bytes)?;
+
+	match chunk.chunk_type {
+	    ChunkType::AnimationControl =>
+		match AnimationChunk::from_chunk(&chunk) {
+		    Some(ref anim) => {
+			apng_header.num_frames = anim.num_frames;
+			apng_header.num_plays = anim.num_plays;
+		    },
+		    None => (),
+		},
+	    ChunkType::ImageData =>
+		match compressed_frames.get_mut(0) {
+		    Some(f) => f.extend_from_slice(chunk.data),
+		    None => {
+			compressed_frames.push(Vec::with_capacity(apng_header.width as usize * apng_header.height as usize * 3));
+			apng_header.skip_first = true;
+			compressed_frames[0].extend_from_slice(chunk.data)
+		    },
+		},
+	    ChunkType::Palette =>
+		    ancillary_chunks.palette = Some(chunk.data),
+	    ChunkType::Transparency =>
+		    ancillary_chunks.transparency = TransparencyChunk::from_chunk(&chunk, pixel_type),
+	    ChunkType::Background =>
+		    ancillary_chunks.background = Some(chunk.data),
+	    ChunkType::FrameControl => {
+		match FrameChunk::from_chunk(&chunk) {
+		    Some(c) => {
+			compressed_frames.push(Vec::with_capacity(c.width as usize * c.height as usize * 3));
+			frame_control.push(c)
+		    },
+		    None => return Err(DecodeError::InvalidControl),
 		}
-
-		if &bytes[0..PNG_MAGIC_BYTES.len()] != PNG_MAGIC_BYTES {
-			return Err(DecodeError::InvalidMagicBytes);
+	    },
+	    ChunkType::FrameData => {
+		match FrameData::from_chunk(&chunk) {
+		    Some(f) => compressed_frames.last_mut().unwrap().extend_from_slice(f.data),
+		    None => (),
 		}
+	    },
+	    _ => {},
+	}
+	bytes = &bytes[chunk.byte_size()..];
+    }
 
-		let bytes = &bytes[PNG_MAGIC_BYTES.len()..];
+    let mut delays = Vec::new();
+    let mut output_frame = vec![0u8; apng_header.width as usize * apng_header.height as usize * 4];
+    let mut png_frames = Vec::new();
 
-		let header_chunk = read_chunk(bytes)?;
-		let header = PngHeader::from_chunk(&header_chunk)?;
-
-		let mut bytes = &bytes[header_chunk.byte_size()..];
-
-		let mut compressed_data: Vec<u8> =
-			Vec::with_capacity(header.width as usize * header.height as usize * 3);
-
-		let pixel_type = PixelType::new(header.color_type, header.bit_depth)?;
-		let mut ancillary_chunks = AncillaryChunks::default();
-
-		let mut compressed_frames = Vec::new();
-		let mut frame_control = Vec::new();
-		let mut animation = None;
-		
-		while !bytes.is_empty() {
-			let chunk = read_chunk(bytes)?;
-		
-			match chunk.chunk_type {
-				ChunkType::AnimationControl => animation = AnimationChunk::from_chunk(&chunk),
-				ChunkType::ImageData => compressed_data.extend_from_slice(chunk.data),
-				ChunkType::Palette => ancillary_chunks.palette = Some(chunk.data),
-				ChunkType::Transparency => ancillary_chunks.transparency = TransparencyChunk::from_chunk(&chunk, pixel_type),
-				ChunkType::Background => ancillary_chunks.background = Some(chunk.data),
-				ChunkType::FrameControl => frame_control.push(FrameChunk::from_chunk(&chunk)),
-				ChunkType::FrameData => {
-					let frame = FrameData::from_chunk(&chunk).unwrap();
-					let mut compressed_frame: Vec<u8> =
-						Vec::with_capacity(header.width as usize * header.height as usize * 3);
-					compressed_frame.extend_from_slice(frame.data);
-					compressed_frames.push(compressed_frame)
-				},
-				_ => {},
-			}
-
-			bytes = &bytes[chunk.byte_size()..];
-		}
-		
-		let num_frames = match animation {
-			Some(ref v) => v.num_frames as usize,
-			None => 1,
-		};
-
-		let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed_data)
-			.map_err(DecodeError::Decompress)?;
-
-		// For now, output data is always RGBA, 1 byte per channel.
-		let mut output_rgba = vec![0u8; header.width as usize * header.height as usize * 4];
-
+    for (mut pos,frame) in compressed_frames.iter().enumerate() {
+	if apng_header.skip_first {
+	    if pos != 0 {
+		pos -= 1;
+	    } else {
+		let mut output_rgba = vec![0u8; apng_header.width as usize * apng_header.height as usize * 4];
+		let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&frame)
+		.map_err(DecodeError::Decompress)?;
 		process_scanlines(
-			&header,
-			&mut scanline_data,
-			&mut output_rgba,
-			&ancillary_chunks,
-			pixel_type,
+		    &header,
+		    &mut scanline_data,
+		    &mut output_rgba,
+		    &ancillary_chunks,
+		    pixel_type,
 		)?;
-		let mut png_frames = vec![output_rgba];
-		
-		if num_frames > 1 {
-			for frame in compressed_frames {
-		
-				let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&frame)
-					.map_err(DecodeError::Decompress)?;
-				// For now, output data is always RGBA, 1 byte per channel.
-				let mut output_rgba = vec![0u8; header.width as usize * header.height as usize * 4];
-
-				process_scanlines(
-					&header,
-					&mut scanline_data,
-					&mut output_rgba,
-					&ancillary_chunks,
-					pixel_type,
-				)?;
-				png_frames.push(output_rgba);
-			}
-		}
-
-		Ok((header, png_frames))
+		png_frames.push(output_rgba);
+		continue;
+	    }
 	}
 
+	let control = &frame_control[pos];
+	let num = control.delay_num as f64;
+	let den = if control.delay_den == 0 { 100.0 } else { control.delay_den as f64};
+	delays.push( core::time::Duration::from_millis( (num * 1_000.0 / den) as u64 ) );
+
+	let mut output_rgba = vec![0u8; control.width as usize * control.height as usize * 4];
+	header.width = control.width;
+	header.height = control.height;
+
+	let mut scanline_data = miniz_oxide::inflate::decompress_to_vec_zlib(&frame)
+	    .map_err(DecodeError::Decompress)?;
+		
+	process_scanlines(
+	    &header,
+	    &mut scanline_data,
+	    &mut output_rgba,
+	    &ancillary_chunks,
+	    pixel_type,
+	)?;
+
+	let mut cursor = (control.y_offset * apng_header.width + control.x_offset) as usize * 4 ;
+	
+	for line in output_rgba.chunks_exact(control.width as usize *4){
+	    if control.blend_op == BlendOp::Source {
+		replace(&mut output_frame[cursor..cursor+line.len()], &line[..]);
+	    }else if control.blend_op == BlendOp::Over {
+		blend(&mut output_frame[cursor..cursor+line.len()], &line[..]);
+	    }
+	    cursor = cursor + apng_header.width as usize *4;
+	}
+	
+	png_frames.push(output_frame.clone());
+
+	let out_len = png_frames.len();
+	let line_w = control.width as usize *4;
+	let mut cursor = (control.y_offset * apng_header.width + control.x_offset) as usize * 4 ;
+	for _ in 0..control.height as usize {
+	    if control.dispose_op == DisposeOp::Background ||
+	      (control.dispose_op == DisposeOp::None && out_len < 1) {
+		replace(&mut output_frame[cursor..cursor+line_w], &vec![0u8;line_w]);
+	    }else if control.dispose_op == DisposeOp::Previous && out_len > 1 {
+		replace(&mut output_frame[cursor..cursor+line_w], &png_frames[out_len-2][cursor..cursor+line_w]);
+	    }
+	    cursor += apng_header.width as usize *4;
+	}			
+    }
+
+    if delays.len() > 1 &&
+       delays[1..].iter().all(|&x| x == delays[0]) {
+	apng_header.delays.push(delays[0]);
+    }else{
+	apng_header.delays = delays;
+    }
+
+    Ok((apng_header, png_frames))
 }
+} // end apng mod
 
 #[cfg(test)]
 mod tests {
